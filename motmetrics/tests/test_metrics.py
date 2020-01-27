@@ -94,8 +94,7 @@ def test_assignment_metrics_with_empty_groundtruth():
 
     mh = mm.metrics.create()
     metr = mh.compute(acc, return_dataframe=False, metrics=[
-        'num_matches', 'num_false_positives', 'num_misses',
-        'idtp', 'idfp', 'idfn',
+        'num_matches', 'num_false_positives', 'num_misses', 'idtp', 'idfp', 'idfn',
     ])
     assert metr['num_matches'] == 0
     assert metr['num_false_positives'] == 16

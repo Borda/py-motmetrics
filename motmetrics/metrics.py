@@ -231,6 +231,7 @@ class MetricsHost:
 
     def _compute_parallel(self, df_map, metrics, options, parent='summarize', nb_jobs=-1):
         nb_jobs = cpu_count() if nb_jobs < 0 else int(max(1, nb_jobs))
+
         pool = ProcessPool(processes=nb_jobs)
         _wrap_compute = partial(self._compute,
                                 df_map=df_map,
@@ -309,7 +310,7 @@ class MetricsHost:
         """Compute metric and resolve dependencies."""
         assert name in self.metrics, 'Cannot find metric {} required by {}.'.format(name, parent)
         if name in cache:
-            return cache[name]
+            return cache
         minfo = self.metrics[name]
         vals = []
         for depname in minfo['deps']:
@@ -500,16 +501,31 @@ def recall_m(partials, num_detections, num_objects):
 
 
 # This is taking out is needed for pickle in parallel
-class DfMap:
-    pass
+# class DfMap:
+#
+#     def __init__(self, df):
+#         self.full = df
+#         self.raw = df[df.Type == 'RAW']
+#         self.extra = df[df.Type != 'RAW']
+#         self.noraw = self.extra[(self.extra.Type != 'ASCEND')
+#                                 & (self.extra.Type != 'TRANSFER')
+#                                 & (self.extra.Type != 'MIGRATE')]
+#
+#     def __del__(self):
+#         pass
 
 
 def events_to_df_map(df):
-    df_map = DfMap()
+    # https://stackoverflow.com/questions/22487296
+    from multiprocessing import Manager
+    mgr = Manager()
+    df_map = mgr.Namespace()
     df_map.full = df
     df_map.raw = df[df.Type == 'RAW']
-    df_map.noraw = df[(df.Type != 'RAW') & (df.Type != 'ASCEND') & (df.Type != 'TRANSFER') & (df.Type != 'MIGRATE')]
     df_map.extra = df[df.Type != 'RAW']
+    df_map.noraw = df_map.extra[(df_map.extra.Type != 'ASCEND')
+                                 & (df_map.extra.Type != 'TRANSFER')
+                                 & (df_map.extra.Type != 'MIGRATE')]
     return df_map
 
 
