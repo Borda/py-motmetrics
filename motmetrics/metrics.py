@@ -14,7 +14,7 @@ import time
 import warnings
 from collections import OrderedDict
 
-import dask.dataframe as dd
+import dask.dataframe as ddf
 import numpy as np
 import pandas as pd
 
@@ -166,7 +166,7 @@ class MetricsHost:
         elif isinstance(metrics, str):
             metrics = [metrics]
 
-        df_map = events_to_df_map(df)
+        df_map = DfMap(df)
 
         cache = {}
         options = {'ana': ana}
@@ -333,17 +333,17 @@ class MetricsHost:
 
 def num_frames(df):
     """Total number of frames."""
-    return df.full.index.get_level_values(0).unique().shape[0]
+    return df.full['FrameId'].unique().compute().shape[0]
 
 
 def obj_frequencies(df):
     """Total number of occurrences of individual objects over all frames."""
-    return df.noraw.OId.value_counts()
+    return df.noraw.OId.value_counts().compute()
 
 
 def pred_frequencies(df):
     """Total number of occurrences of individual predictions over all frames."""
-    return df.noraw.HId.value_counts()
+    return df.noraw.HId.value_counts().compute()
 
 
 def num_unique_objects(df, obj_frequencies):
@@ -353,37 +353,37 @@ def num_unique_objects(df, obj_frequencies):
 
 def num_matches(df):
     """Total number matches."""
-    return df.noraw.Type.isin(['MATCH']).sum()
+    return df.noraw.Type.isin(['MATCH']).sum().compute()
 
 
 def num_switches(df):
     """Total number of track switches."""
-    return df.noraw.Type.isin(['SWITCH']).sum()
+    return df.noraw.Type.isin(['SWITCH']).sum().compute()
 
 
 def num_transfer(df):
     """Total number of track transfer."""
-    return df.extra.Type.isin(['TRANSFER']).sum()
+    return df.extra.Type.isin(['TRANSFER']).sum().compute()
 
 
 def num_ascend(df):
     """Total number of track ascend."""
-    return df.extra.Type.isin(['ASCEND']).sum()
+    return df.extra.Type.isin(['ASCEND']).sum().compute()
 
 
 def num_migrate(df):
     """Total number of track migrate."""
-    return df.extra.Type.isin(['MIGRATE']).sum()
+    return df.extra.Type.isin(['MIGRATE']).sum().compute()
 
 
 def num_false_positives(df):
     """Total number of false positives (false-alarms)."""
-    return df.noraw.Type.isin(['FP']).sum()
+    return df.noraw.Type.isin(['FP']).sum().compute()
 
 
 def num_misses(df):
     """Total number of misses."""
-    return df.noraw.Type.isin(['MISS']).sum()
+    return df.noraw.Type.isin(['MISS']).sum().compute()
 
 
 def num_detections(df, num_matches, num_switches):
@@ -403,12 +403,12 @@ def num_predictions(df, pred_frequencies):
 
 def num_predictions(df):
     """Total number of unique prediction appearances over all frames."""
-    return df.noraw.HId.count()
+    return df.noraw.HId.count().compute()
 
 
 def track_ratios(df, obj_frequencies):
     """Ratio of assigned to total appearance count per unique object id."""
-    tracked = df.noraw[df.noraw.Type != 'MISS']['OId'].value_counts()
+    tracked = df.noraw[df.noraw.Type != 'MISS']['OId'].value_counts().compute()
     return tracked.div(obj_frequencies).fillna(0.)
 
 
@@ -433,12 +433,11 @@ def num_fragmentations(df, obj_frequencies):
     for o in obj_frequencies.index:
         # Find first and last time object was not missed (track span). Then count
         # the number switches from NOT MISS to MISS state.
-        dfo = df.noraw[df.noraw.OId == o]
+        dfo = df.noraw[df.noraw.OId == o].compute()
         notmiss = dfo[dfo.Type != 'MISS']
         if len(notmiss) == 0:
             continue
-        first = notmiss.index[0]
-        last = notmiss.index[-1]
+        first, last = notmiss['FrameId'].values[[0, -1]]
         diffs = dfo.loc[first:last].Type.apply(lambda x: 1 if x == 'MISS' else 0).diff()
         fra += diffs[diffs == 1].count()
     return fra
@@ -446,7 +445,7 @@ def num_fragmentations(df, obj_frequencies):
 
 def motp(df, num_detections):
     """Multiple object tracker precision."""
-    return _qdiv(df.noraw['D'].sum(), num_detections)
+    return _qdiv(df.noraw['D'].sum().compute(), num_detections)
 
 
 def motp_m(partials, num_detections):
@@ -483,20 +482,18 @@ def recall_m(partials, num_detections, num_objects):
     return _qdiv(num_detections, num_objects)
 
 
-def events_to_df_map(df):
-    class DfMap:
-        pass
-    df_map = DfMap()
-    # converting Pandas DF ro dask DF
-    df = dd.DataFrame(df)
-    # see: https://docs.dask.org/en/latest/dataframe.html
-    df_map.full = df
-    df_map.raw = df[df.Type == 'RAW']
-    df_map.extra = df[df.Type != 'RAW']
-    df_map.noraw = df_map.extra[(df_map.extra.Type != 'ASCEND')
-                                & (df_map.extra.Type != 'TRANSFER')
-                                & (df_map.extra.Type != 'MIGRATE')]
-    return df_map
+class DfMap:
+
+    def __init__(self, df):
+        # converting Pandas DF ro dask DF
+        df = ddf.from_pandas(df.reset_index(), npartitions=10).persist()
+        # see: https://docs.dask.org/en/latest/dataframe.html
+        self.full = df
+        self.raw = df[df.Type == 'RAW']
+        self.extra = df[df.Type != 'RAW']
+        self.noraw = self.extra[(self.extra.Type != 'ASCEND')
+                                & (self.extra.Type != 'TRANSFER')
+                                & (self.extra.Type != 'MIGRATE')]
 
 
 def extract_counts_from_df_map(df):
@@ -508,12 +505,12 @@ def extract_counts_from_df_map(df):
         tps: Dict from (object id, hypothesis id) to true-positive count.
         The ids are arbitrary, they might NOT be consecutive integers from 0.
     """
-    oids = df.full['OId'].dropna().unique()
-    hids = df.full['HId'].dropna().unique()
+    oids = list(df.full['OId'].dropna().unique().compute())
+    hids = list(df.full['HId'].dropna().unique().compute())
 
     flat = df.raw.reset_index()
     # Exclude events that do not belong to either set.
-    flat = flat[flat['OId'].isin(oids) | flat['HId'].isin(hids)]
+    flat = flat[flat['OId'].isin(oids) | flat['HId'].isin(hids)].compute()
     # Count number of frames where each (non-empty) OId and HId appears.
     ocs = flat.set_index('OId')['FrameId'].groupby('OId').nunique().to_dict()
     hcs = flat.set_index('HId')['FrameId'].groupby('HId').nunique().to_dict()
