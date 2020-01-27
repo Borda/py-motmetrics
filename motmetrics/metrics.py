@@ -14,6 +14,7 @@ import time
 import warnings
 from collections import OrderedDict
 
+import dask.dataframe as dd
 import numpy as np
 import pandas as pd
 
@@ -540,10 +541,15 @@ def events_to_df_map(df):
     class DfMap:
         pass
     df_map = DfMap()
+    # converting Pandas DF ro dask DF
+    df = dd.DataFrame(df)
+    # see: https://docs.dask.org/en/latest/dataframe.html
     df_map.full = df
     df_map.raw = df[df.Type == 'RAW']
-    df_map.noraw = df[(df.Type != 'RAW') & (df.Type != 'ASCEND') & (df.Type != 'TRANSFER') & (df.Type != 'MIGRATE')]
     df_map.extra = df[df.Type != 'RAW']
+    df_map.noraw = df_map.extra[(df_map.extra.Type != 'ASCEND')
+                                & (df_map.extra.Type != 'TRANSFER')
+                                & (df_map.extra.Type != 'MIGRATE')]
     return df_map
 
 
